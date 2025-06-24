@@ -321,9 +321,9 @@ class ADDS():
             for i, object in enumerate(all_objects):
                 self.recalculate_sid(object)
                 self.calculate_contained(object)
-                self.add_domainsid_prop(object)
                 try:
                     num_parsed_relations += self.parse_acl(object)
+                    self.add_domainsid_prop(object)  # Move after parse_acl so Aces are populated
                     status.update(f" [bold] Processing {num_parsed_relations} ACLs --- {i}/{total_objects} objects parsed")
                 except:
                     #
@@ -657,6 +657,16 @@ class ADDS():
         dc = BloodHoundObject.get_domain_component(object.Properties["distinguishedname"])
         if dc in self.DOMAIN_MAP.keys():
             object.Properties["domainsid"] = self.DOMAIN_MAP[dc]
+        else:
+            # Fallback: extract domain SID from existing ACE data
+            if hasattr(object, 'Aces') and object.Aces:
+                for ace in object.Aces:
+                    if 'PrincipalSID' in ace and ace['PrincipalSID'].count('-') >= 6:
+                        # Extract domain SID (everything except the last RID)
+                        sid_parts = ace['PrincipalSID'].rsplit('-', 1)
+                        if len(sid_parts) == 2 and sid_parts[0].startswith('S-1-5-21-'):
+                            object.Properties["domainsid"] = sid_parts[0]
+                            break
 
 
     def resolve_trust_relationships(self):
