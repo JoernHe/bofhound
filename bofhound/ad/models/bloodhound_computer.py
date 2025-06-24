@@ -1,6 +1,9 @@
 import calendar
+import base64
 from datetime import datetime
+from io import BytesIO
 from bloodhound.ad.utils import ADUtils, LDAP_SID
+from bloodhound.enumeration.acls import SecurityDescriptor
 from .bloodhound_object import BloodHoundObject
 from bofhound.logger import OBJ_EXTRA_FMT, ColorScheme
 import logging
@@ -16,8 +19,8 @@ class BloodHoundComputer(BloodHoundObject):
 
     COMMON_PROPERTIES = [
         'useraccountcontrol', 'dnshostname', 'samaccounttype', 'primarygroupid',
-        'msds-allowedtodelegateto', 'operatingsystemservicepack',
-        'msds-allowedtoactonbehalfofotheridentity', 'ms-mcs-admpwdexpirationtime',
+        'operatingsystemservicepack',
+        'ms-mcs-admpwdexpirationtime',
         'memberof'
     ]
 
@@ -44,6 +47,7 @@ class BloodHoundComputer(BloodHoundObject):
         self.PrimaryGroupSid = self.get_primary_membership(object) # Returns none if non-existent
         self.sessions = None #['not currently supported by bofhound']
         self.AllowedToDelegate = []
+        self.AllowedToAct = []
         self.MemberOfDNs = []
         self.sessions = []
         self.ContainedBy = {}
@@ -88,6 +92,9 @@ class BloodHoundComputer(BloodHoundObject):
                     name = f'{samacctname}.{domain}'.upper()
                 self.Properties["name"] = name
                 logging.debug(f"Reading Computer object {ColorScheme.computer}{self.Properties['name']}[/]", extra=OBJ_EXTRA_FMT)
+
+        if 'msds-allowedtoactonbehalfofotheridentity' in object.keys():
+            self.AllowedToAct = self._parse_allowed_to_act(object.get('msds-allowedtoactonbehalfofotheridentity'))
 
         # TODO: HighValue / AdminCount
         self.Properties['highvalue'] = False
@@ -142,6 +149,46 @@ class BloodHoundComputer(BloodHoundObject):
         else:
             self.Properties['description'] = None
 
+    def _parse_allowed_to_act(self, base64_data):
+        """
+        Parse the msDS-AllowedToActOnBehalfOfOtherIdentity attribute from base64 encoded security descriptor
+        Returns a list of dictionaries with ObjectIdentifier and ObjectType
+        """
+        if not base64_data:
+            return []
+        
+        try:
+            # Decode the base64 data
+            value = base64.b64decode(base64_data)
+            if not value:
+                return []
+            
+            # Parse the security descriptor
+            sd = SecurityDescriptor(BytesIO(value))
+            allowed_to_act = []
+            
+            # Parse DACL entries to extract SIDs
+            if sd.dacl:
+                for ace_object in sd.dacl.aces:
+                    # Extract SID from the ACE
+                    sid = str(ace_object.acedata.sid)
+                    # Determine object type based on SID pattern
+                    # This is a simplification - in practice you might need more logic
+                    # to determine the actual object type
+                    object_type = "Computer"  # Default assumption for resource-based constrained delegation
+                    
+                    allowed_to_act.append({
+                        "ObjectIdentifier": sid,
+                        "ObjectType": object_type
+                    })
+            
+            return allowed_to_act
+            
+        except Exception as e:
+            logging.warning(f'Error parsing msDS-AllowedToActOnBehalfOfOtherIdentity: {e}')
+            return []
+
+
     def to_json(self, properties_level):
         self.Properties['msds-allowedtodelegateto'] = self.AllowedToDelegate
         self.Properties['isaclprotected'] = self.IsACLProtected
@@ -152,7 +199,7 @@ class BloodHoundComputer(BloodHoundObject):
         data["ObjectIdentifier"] = self.ObjectIdentifier
         data["PrimaryGroupSID"] = self.PrimaryGroupSid
         data["AllowedToDelegate"] = self.AllowedToDelegate
-        data["AllowedToAct"] = []
+        data["AllowedToAct"] = self.AllowedToAct
         data["HasSidHistory"] = self.Properties.get("sidhistory", [])
         data["DumpSMSAPassword"] = []
         data["LocalGroups"] = self.format_local_group_json()
@@ -238,4 +285,4 @@ class BloodHoundComputer(BloodHoundObject):
         if group_name.lower() not in self.local_group_members.keys():
             self.local_group_members[group_name.lower()] = [ member ]
         else:
-            self.local_group_members[group_name.lower()].append(member)    
+            self.local_group_members[group_name.lower()].append(member)

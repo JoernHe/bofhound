@@ -393,11 +393,15 @@ class ADDS():
                     continue
                 try:
                     (sid, object_type) = self.get_sid_from_name(target.lower())
-                    delegation_entry = {"ObjectIdentifier": sid, "ObjectType": object_type}
-                    resolved_delegation_list.append(delegation_entry)
+                    # Only add entries where both sid and object_type are not None
+                    if sid is not None and object_type is not None:
+                        delegation_entry = {"ObjectIdentifier": sid, "ObjectType": object_type}
+                        resolved_delegation_list.append(delegation_entry)
+                    else:
+                        logging.warning('Could not resolve delegation target: %s - skipping', target)
                 except KeyError:
-                    if '.' in target:
-                        resolved_delegation_list.append(target.upper())
+                    # Skip unresolved delegation targets
+                    logging.warning('Could not resolve delegation target: %s - skipping', target)
             if len(delegatehosts) > 0:
                 object.Properties['allowedtodelegate'] = delegatehosts
                 object.AllowedToDelegate = resolved_delegation_list
